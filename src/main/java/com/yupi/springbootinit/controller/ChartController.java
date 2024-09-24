@@ -15,12 +15,14 @@ import com.yupi.springbootinit.constant.FileConstant;
 import com.yupi.springbootinit.constant.UserConstant;
 import com.yupi.springbootinit.exception.BusinessException;
 import com.yupi.springbootinit.exception.ThrowUtils;
+import com.yupi.springbootinit.manager.AiManager;
 import com.yupi.springbootinit.model.dto.chart.*;
 import com.yupi.springbootinit.model.dto.file.UploadFileRequest;
 import com.yupi.springbootinit.model.entity.Chart;
 import com.yupi.springbootinit.model.entity.User;
 
 import com.yupi.springbootinit.model.enums.FileUploadBizEnum;
+import com.yupi.springbootinit.model.vo.BiResponse;
 import com.yupi.springbootinit.service.ChartService;
 import com.yupi.springbootinit.service.UserService;
 import com.yupi.springbootinit.utils.ExcelUtils;
@@ -52,6 +54,9 @@ public class ChartController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private AiManager aiManager;
 
     // region 增删改查
 
@@ -86,7 +91,7 @@ public class ChartController {
      * @return
      */
     @PostMapping("/gen")
-    public BaseResponse<String> genChartByAi(@RequestPart("file") MultipartFile multipartFile,
+    public BaseResponse<BiResponse> genChartByAi(@RequestPart("file") MultipartFile multipartFile,
                                              GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
         String name = genChartByAiRequest.getName();
         String goal = genChartByAiRequest.getGoal();
@@ -97,36 +102,53 @@ public class ChartController {
         ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "目标为空");
         // 如果名称不为空，并且名称长度大于100，就抛出异常，并给出提示
         ThrowUtils.throwIf(StringUtils.isNotBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "名称过长");
-
+        //request对象拿到用户id
+        User loginUser = userService.getLoginUser(request);
+        //指定模型id
+        long biModelId = 1811774637469532161L;
+        //构造用户输入
         StringBuilder userInput = new StringBuilder();
-        userInput.append("你是一个数据分析师，接下来我会给你我的分析目标和原始数据，请告诉我分析结论").append("\n");
-        userInput.append("分析目标：").append(goal).append("\n");
+        userInput.append("分析需求:").append("\n");
+        //拼接分析目标
+        String userGoal = goal;
+        //如果图表类型不为空
+        if(StringUtils.isNotBlank(chartType)) {
+            // 就将分析目标拼接上“请使用”+图表类型
+            userGoal+=", 请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据:").append("\n");
+        //压缩后的数据
+        String csvData = ExcelUtils.exceToCsv(multipartFile);
+        userInput.append(csvData).append("\n");
 
-        String result = ExcelUtils.exceToCsv(multipartFile);
-        userInput.append("数据：").append(result).append("\n");
-        return ResultUtils.success(userInput.toString());
-        // 读取到用户上传的 excel 文件，进行一个处理
-        //User loginUser = userService.getLoginUser(request);
-        //// 文件目录：根据业务、用户来划分
-        //String uuid = RandomStringUtils.randomAlphanumeric(8);
-        //String filename = uuid + "-" + multipartFile.getOriginalFilename();
-        //File file = null;
-        //try {
-        //
-        //    // 返回可访问地址
-        //    return ResultUtils.success("");
-        //} catch (Exception e) {
-        //    //            log.error("file upload error, filepath = " + filepath, e);
-        //    throw new BusinessException(ErrorCode.SYSTEM_ERROR, "上传失败");
-        //} finally {
-        //    if (file != null) {
-        //        // 删除临时文件
-        //        boolean delete = file.delete();
-        //        if (!delete) {
-        //            //                    log.error("file delete error, filepath = {}", filepath);
-        //        }
-        //    }
-        //}
+        //拿到返回结果
+        String result = aiManager.doChat(biModelId, userInput.toString());
+        //拆分返回结果
+        String[] split = result.split("【【【【【");
+        //拆分后进行校验
+        if(split.length < 3) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 生成错误");
+        }
+
+        String genChart = split[1].trim();
+        String genResult = split[2].trim();
+        //插入到数据库
+        Chart chart = new Chart();
+        chart.setGoal(goal);
+        chart.setChartData(csvData);
+        chart.setChartType(chartType);
+        chart.setGenChart(genChart);
+        chart.setGenResult(genResult);
+        chart.setUserId(loginUser.getId());
+        chart.setName(name);
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult, ErrorCode.SYSTEM_ERROR,"图表保存失败");
+        BiResponse biResponse = new BiResponse();
+        biResponse.setGenChart(genChart);
+        biResponse.setGenResult(genResult);
+        biResponse.setChartId(chart.getId());
+        return ResultUtils.success(biResponse);
     }
 
 

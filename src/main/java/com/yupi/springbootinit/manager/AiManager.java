@@ -21,9 +21,9 @@ public class AiManager {
     /**
      * Ai对话
      */
-    public String doChat(String message) {
+    public String doChat(long modeId, String message) {
         DevChatRequest devChatRequest = new DevChatRequest();
-        devChatRequest.setModelId(1651468516836098050L);
+        devChatRequest.setModelId(modeId);
         devChatRequest.setMessage(message);
         BaseResponse<DevChatResponse> response = yuCongMingClient.doChat(devChatRequest);
         //响应null，抛出异常
