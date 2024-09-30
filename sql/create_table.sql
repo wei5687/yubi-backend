@@ -65,7 +65,7 @@ create table if not exists post_favour
     index idx_postId (postId),
     index idx_userId (userId)
 ) comment '帖子收藏';
-
+q
 create table chart_1839317454468792322
 (
     日期  int null,
