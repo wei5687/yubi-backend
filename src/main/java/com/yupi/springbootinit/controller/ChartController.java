@@ -8,6 +8,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.ObjectUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yupi.springbootinit.annotation.AuthCheck;
+import com.yupi.springbootinit.bizmq.BiMessageProducer;
+import com.yupi.springbootinit.bizmq.BiMqConstant;
 import com.yupi.springbootinit.common.BaseResponse;
 import com.yupi.springbootinit.common.DeleteRequest;
 import com.yupi.springbootinit.common.ErrorCode;
@@ -32,7 +34,9 @@ import com.yupi.springbootinit.utils.ExcelUtils;
 import com.yupi.springbootinit.utils.SqlUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomStringUtils;
+
 import java.util.concurrent.ThreadPoolExecutor;
+
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -54,6 +58,8 @@ import java.util.concurrent.CompletableFuture;
 @RequestMapping("/chart")
 @Slf4j
 public class ChartController {
+    @Resource
+    private BiMessageProducer biMessageProducer;
 
     @Resource
     private ChartService chartService;
@@ -136,7 +142,7 @@ public class ChartController {
 //                "{前端 Echarts V5 的 option 配置对象js代码，合理地将数据进行可视化，不要生成任何多余的内容，比如注释}\n" +
 //                "【【【【【\n" +
 //                "{明确的数据分析结论、越详细越好，不要生成多余的注释}";
-        long biModelId = 1659171950288818178L;
+        long biModelId = BiMqConstant.BI_MODEL_ID;
         // 分析需求：
         // 分析网站用户的增长情况
         // 原始数据：
@@ -296,7 +302,7 @@ public class ChartController {
             if (!updateResult) {
                 handleChartUpdateError(chart.getId(), "更新图表成功状态失败");
             }
-        },threadPoolExecutor);
+        }, threadPoolExecutor);
 
         BiResponse biResponse = new BiResponse();
 //        biResponse.setGenChart(genChart);
@@ -304,6 +310,7 @@ public class ChartController {
         biResponse.setChartId(chart.getId());
         return ResultUtils.success(biResponse);
     }
+
     // 上面的接口很多用到异常,直接定义一个工具类
     private void handleChartUpdateError(long chartId, String execMessage) {
         Chart updateChartResult = new Chart();
@@ -387,17 +394,15 @@ public class ChartController {
      * @param chartQueryRequest
      * @return
      */
- //   @PostMapping("/list/page")
- //   @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
- //   public BaseResponse<Page<Chart>> listChartByPage(@RequestBody ChartQueryRequest chartQueryRequest) {
- //       long current = chartQueryRequest.getCurrent();
-  //      long size = chartQueryRequest.getPageSize();
- //       Page<Chart> chartPage = chartService.page(new Page<>(current, size),
- //               chartService.getQueryWrapper(chartQueryRequest));
+    //   @PostMapping("/list/page")
+    //   @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    //   public BaseResponse<Page<Chart>> listChartByPage(@RequestBody ChartQueryRequest chartQueryRequest) {
+    //       long current = chartQueryRequest.getCurrent();
+    //      long size = chartQueryRequest.getPageSize();
+    //       Page<Chart> chartPage = chartService.page(new Page<>(current, size),
+    //               chartService.getQueryWrapper(chartQueryRequest));
 //        return ResultUtils.success(chartPage);
 //    }
-
-
 
 
     /**
@@ -409,7 +414,7 @@ public class ChartController {
      */
     @PostMapping("/list/page")
     public BaseResponse<Page<Chart>> listChartByPage(@RequestBody ChartQueryRequest chartQueryRequest,
-            HttpServletRequest request) {
+                                                     HttpServletRequest request) {
         long current = chartQueryRequest.getCurrent();
         long size = chartQueryRequest.getPageSize();
         // 限制爬虫
@@ -428,7 +433,7 @@ public class ChartController {
      */
     @PostMapping("/my/list/page")
     public BaseResponse<Page<Chart>> listMyChartByPage(@RequestBody ChartQueryRequest chartQueryRequest,
-            HttpServletRequest request) {
+                                                       HttpServletRequest request) {
         if (chartQueryRequest == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
@@ -443,7 +448,6 @@ public class ChartController {
         return ResultUtils.success(chartPage);
     }
 
- 
 
     /**
      * 编辑（用户）
@@ -459,7 +463,7 @@ public class ChartController {
         }
         Chart chart = new Chart();
         BeanUtils.copyProperties(chartEditRequest, chart);
-       
+
         User loginUser = userService.getLoginUser(request);
         long id = chartEditRequest.getId();
         // 判断是否存在
@@ -472,9 +476,9 @@ public class ChartController {
         boolean result = chartService.updateById(chart);
         return ResultUtils.success(result);
     }
-    
-    
-        /**
+
+
+    /**
      * 获取查询包装类
      *
      * @param chartQueryRequest
@@ -494,17 +498,107 @@ public class ChartController {
         String chartType = chartQueryRequest.getChartType();
         Long userId = chartQueryRequest.getUserId();
 
-        queryWrapper.eq(id != null && id > 0 , "id", id);
+        queryWrapper.eq(id != null && id > 0, "id", id);
         queryWrapper.eq(StringUtils.isNotBlank(goal), "goal", goal);
         queryWrapper.like(StringUtils.isNotBlank(name), "name", name);
         queryWrapper.eq(StringUtils.isNotBlank(chartType), "chartType", chartType);
         queryWrapper.eq(ObjectUtils.isNotEmpty(userId), "userId", userId);
-        queryWrapper.eq("isDelete",false);
+        queryWrapper.eq("isDelete", false);
         queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
                 sortField);
         return queryWrapper;
     }
-    
 
+
+    /**
+     * 智能分析（异步）
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen/async/mq")
+    public BaseResponse<BiResponse> genChartByAiAsyncMq(@RequestPart("file") MultipartFile multipartFile,
+                                                        GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String name = genChartByAiRequest.getName();
+        String goal = genChartByAiRequest.getGoal();
+        String chartType = genChartByAiRequest.getChartType();
+
+        // 校验
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "目标为空");
+        ThrowUtils.throwIf(StringUtils.isNotBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "名称过长");
+
+        // 校验文件
+        long size = multipartFile.getSize();
+        String originalFilename = multipartFile.getOriginalFilename();
+
+        // 校验文件大小
+        final long ONE_MB = 1024 * 1024L;
+        ThrowUtils.throwIf(size > ONE_MB, ErrorCode.PARAMS_ERROR, "文件超过 1M");
+
+        // 校验文件大小缀 aaa.png
+        String suffix = FileUtil.getSuffix(originalFilename);
+        final List<String> validFileSuffixList = Arrays.asList("xlsx", "xls");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "文件后缀非法");
+
+        User loginUser = userService.getLoginUser(request);
+
+        // 限流判断，每个用户一个限流器
+        redisLimiterManager.doRateLimit("genChartByAi_" + loginUser.getId());
+
+        // 指定一个模型id(把id写死，也可以定义成一个常量)
+        long biModelId = 1659171950288818178L;
+        // 分析需求：
+        // 分析网站用户的增长情况
+        // 原始数据：
+        // 日期,用户数
+        // 1号,10
+        // 2号,20
+        // 3号,30
+
+        // 构造用户输入
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("分析需求：").append("\n");
+
+        // 拼接分析目标
+        String userGoal = goal;
+        if (StringUtils.isNotBlank(chartType)) {
+            userGoal += "，请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据：").append("\n");
+        // 压缩后的数据
+        String csvData = ExcelUtils.exceToCsv(multipartFile);
+        userInput.append(csvData).append("\n");
+
+
+        // 先把图表保存到数据库中
+        Chart chart = new Chart();
+        chart.setName(name);
+        chart.setGoal(goal);
+        chart.setChartData(csvData);
+        chart.setChartType(chartType);
+        // 插入数据库时,还没生成结束,把生成结果都去掉
+//        chart.setGenChart(genChart);
+//        chart.setGenResult(genResult);
+        // 设置任务状态为排队中
+        chart.setStatus("wait");
+        chart.setUserId(loginUser.getId());
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult, ErrorCode.SYSTEM_ERROR, "图表保存失败");
+
+        // 在最终的返回结果前提交一个任务
+        // todo 建议处理任务队列满了后,抛异常的情况(因为提交任务报错了,前端会返回异常)
+
+        long newChartId = chart.getId();
+
+        biMessageProducer.sendMessage(String.valueOf(newChartId));
+
+        BiResponse biResponse = new BiResponse();
+        biResponse.setChartId(newChartId);
+
+        return ResultUtils.success(biResponse);
+    }
 
 }

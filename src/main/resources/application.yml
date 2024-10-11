@@ -48,6 +48,7 @@ spring:
     prot: 5672
     password: guest
     username: guest
+
 server:
   address: 0.0.0.0
   port: 8101
