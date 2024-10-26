@@ -35,9 +35,12 @@ import com.yupi.springbootinit.utils.SqlUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomStringUtils;
 
+import java.util.ArrayList;
 import java.util.concurrent.ThreadPoolExecutor;
 
+import org.apache.poi.ss.formula.functions.T;
 import org.springframework.beans.BeanUtils;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -75,6 +78,9 @@ public class ChartController {
 
     @Resource
     private ThreadPoolExecutor threadPoolExecutor;
+
+    @Resource
+    private RedisTemplate<String, Object> redisTemplate;
 
     // region 增删改查
 
@@ -308,6 +314,7 @@ public class ChartController {
 //        biResponse.setGenChart(genChart);
 //        biResponse.setGenResult(genResult);
         biResponse.setChartId(chart.getId());
+
         return ResultUtils.success(biResponse);
     }
 
@@ -443,10 +450,63 @@ public class ChartController {
         long size = chartQueryRequest.getPageSize();
         // 限制爬虫
         ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
-        Page<Chart> chartPage = chartService.page(new Page<>(current, size),
-                getQueryWrapper(chartQueryRequest));
+        Page<Chart> chartPage = null;
+
+        //如果搜索框为空
+        if(chartQueryRequest.getName() == "" || chartQueryRequest.getName() == null) {
+            //判断redis键值是否存在
+            if (redisTemplate.hasKey("charts")) {
+                List<Object> charts = redisTemplate.opsForList().range("charts", 0, -1);
+                chartPage = new Page<>();
+                chartPage.setRecords((List<Chart>) (List) charts);
+                chartPage.setTotal(redisTemplate.opsForList().size("charts"));
+                chartPage.setSize(size);
+                chartPage.setCurrent(current);
+            } else {
+                //如果不存在，数据放入redis中
+                chartPage = chartService.page(new Page<>(current, size),
+                        getQueryWrapper(chartQueryRequest));
+                chartPage.getRecords()
+                        .forEach(chart -> {
+                            redisTemplate.opsForList().rightPush("charts", chart);
+                        });
+            }
+        } else {
+            //redis存在且搜索关键字包含在第一条数据中
+            if(redisTemplate.hasKey("searchChart")) {
+                //搜索关键字和redis第一条数据进行判断
+                Object searchChart = redisTemplate.opsForList().index("searchChart", 0);
+                boolean flag = searchChart.toString().contains(chartQueryRequest.getName());
+                if(flag) {
+                    List<Object> charts = redisTemplate.opsForList().range("searchChart", 0, -1);
+                    chartPage = new Page<>();
+                    chartPage.setRecords((List<Chart>) (List) charts);
+                    chartPage.setTotal(redisTemplate.opsForList().size("searchChart"));
+                    chartPage.setSize(size);
+                    chartPage.setCurrent(current);
+                } else {
+                    redisTemplate.delete("searchChart");
+                    chartPage = chartService.page(new Page<>(current, size),
+                            getQueryWrapper(chartQueryRequest));
+                    chartPage.getRecords()
+                            .forEach(chart -> {
+                                redisTemplate.opsForList().rightPush("searchChart", chart);
+                            });
+                }
+            } else {
+                redisTemplate.delete("searchChart");
+                chartPage = chartService.page(new Page<>(current, size),
+                        getQueryWrapper(chartQueryRequest));
+                chartPage.getRecords()
+                        .forEach(chart -> {
+                            redisTemplate.opsForList().rightPush("searchChart", chart);
+                        });
+            }
+        }
+
         return ResultUtils.success(chartPage);
     }
+
 
 
     /**
@@ -597,7 +657,7 @@ public class ChartController {
 
         BiResponse biResponse = new BiResponse();
         biResponse.setChartId(newChartId);
-
+        redisTemplate.delete("charts");
         return ResultUtils.success(biResponse);
     }
 

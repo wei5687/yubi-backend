@@ -40,6 +40,7 @@ public class BiInitMain {
             Map<String, Object> maps = new HashMap<>();
             maps.put("x-dead-letter-exchange", DEAD_EXCHANGE);
             maps.put("x-dead-letter-routing-key", DEAD_ROUTING_KEY);
+            maps.put("x-message-ttl", 60000); // 设置消息TTL为60秒
 
             // 声明队列，设置队列持久化、非独占、非自动删除，并传入额外的参数为 null
             channel.queueDeclare(NORMAL_QUEUE, false, false, false, maps);
